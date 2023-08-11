@@ -6,8 +6,11 @@ import subprocess
 import click
 import gitlab
 import gitlab.v4.objects.projects
+import logwood
 
 import maintenance_app.data_types
+import maintenance_app.tools
+import maintenance_app.upload_data
 
 
 def get_average_cyclomatic_complexity(project_path: str) -> decimal.Decimal:
@@ -25,7 +28,7 @@ def get_average_cyclomatic_complexity(project_path: str) -> decimal.Decimal:
 
 
 def get_gitlab_project_attributes(
-	project: gitlab.v4.objects.projects.Project,
+	project: gitlab.v4.objects.projects.RESTObject,
 ) -> maintenance_app.data_types.GitlabProjectAttributes:
 	return maintenance_app.data_types.GitlabProjectAttributes(
 		id = project.id,
@@ -44,9 +47,9 @@ def get_gitlab_metrics(
 	project_name: Optional[str] = None,
 ) -> Optional[list[maintenance_app.data_types.GitlabProjectAttributes]]:
 	gl = gitlab.Gitlab(gitlab_url, private_token = private_token)
-	projects = []
+	projects: list[maintenance_app.data_types.GitlabProjectAttributes] = []
 	for project in gl.projects.list(iterator = True):
-		if project_name is None:
+		if project_name is None and not project.archived:
 			projects.append(get_gitlab_project_attributes(project))
 		elif project.name == project_name:
 			return [get_gitlab_project_attributes(project)]
@@ -58,9 +61,33 @@ def get_gitlab_metrics(
 @click.option('--gitlab-url', '-u', type = str)
 @click.option('--private-token', '-t', type = str)
 @click.option('--project-name', '-n', default = None)
-def metrics(project_path: str, gitlab_url: str, private_token: str, project_name: str):
-	print('Project path: ', project_path)
+@click.option(
+	'--profile',
+	required = True,
+	envvar = 'PROFILE',
+	help = 'Settings profile',
+	default = 'dev',
+	show_default = True,
+)
+@click.pass_context
+def metrics(
+	ctx: click.Context,
+	project_path: str,
+	gitlab_url: str,
+	private_token: str,
+	project_name: str,
+	profile: str,
+):
+	ctx.ensure_object(dict)
+	ctx.obj['settings'] = maintenance_app.tools.settings_load(profile)
+	ctx.obj['settings']['PROFILE'] = profile
+
+	logwood.basic_config()
+	logger = logwood.get_logger('Maintenance-app-logger')
+
+	logger.info('Project path = {}', project_path)
 	average_cyclomatic_complexity = get_average_cyclomatic_complexity(project_path)
-	print('average_cyclomatic_complexity: ', average_cyclomatic_complexity)
+	logger.info('Average cyclomatic complexity = {}', average_cyclomatic_complexity)
 	gitlab_metrics = get_gitlab_metrics(gitlab_url, private_token, project_name)
-	print(gitlab_metrics)
+	logger.info(str(gitlab_metrics))
+	# await maintenance_app.upload_data.upload_data_to_lakehouse(ctx.obj['settings'])
